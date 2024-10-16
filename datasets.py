@@ -2,17 +2,51 @@ import numpy as np
 import os, sys
 import matplotlib
 import matplotlib.pyplot as plt
+import pdb
+import torch
+
+
 from PIL import Image
 from collections import defaultdict
-import pdb
 from skimage.transform import resize
-
-import torch
 from torch.utils.data.dataset import Dataset
 from torchvision import transforms
 
 
 class CFD3DDataset(Dataset):
+    
+    """
+    CFD3DDataset is a custom PyTorch Dataset class for handling 3D CFD (Computational Fluid Dynamics) data.
+    Attributes:
+        data_directory (str): Path to the directory containing subfolders with the npy files.
+        no_simulations (int): Number of simulations.
+        simulation_timesteps (int): Number of timesteps per simulation.
+        transforms (callable, optional): Optional transform to be applied on a sample.
+        cubes_U_all_channels (list): List of numpy arrays, each representing a cube with shape (21, 21, 21, 3).
+        data_len (int): Length of the dataset.
+        stacked_cubes (numpy.ndarray): Numpy array of stacked cubes with shape (9600, 21, 21, 21, 3).
+        mean (torch.Tensor): Mean of the dataset along the 3 channels.
+        std (torch.Tensor): Standard deviation of the dataset along the 3 channels.
+        standardized_cubes (numpy.ndarray): Standardized cubes with mean 0 and std 1.
+    Methods:
+        __load_3D_cubes(self, data_directory):
+            Loads 3D CFD data from the specified directory into a dictionary.
+        __compare_U_sim_keys(self, cube1, cube2):
+            Compares keys of two dictionaries to ensure they have the same simulation parameters.
+        __merge_velocity_components_into_dict(self, cubes_U0, cubes_U1, cubes_U2):
+            Merges velocity components U0, U1, U2 into a single dictionary based on simulation keys.
+        __concatenate_3_velocity_components(self, cubes_dict):
+            Concatenates the 3 velocity components into a list of numpy arrays.
+        __compute_mean_std_dataset(self, data):
+            Computes the mean and standard deviation of the dataset along the 3 channels.
+        __standardize_cubes(self, data):
+            Standardizes the data to have mean 0 and std 1.
+        __minmax_normalization(self, data):
+            Performs MinMax normalization on the given array.
+        __scale_by(self, arr, fac):
+            Scales the array by a given factor.
+    """
+
     def __init__(self, data_directory, no_simulations, simulation_timesteps, transforms=None):
         """
         data_directory: path to directory that contains subfolders with the npy files
@@ -33,55 +67,59 @@ class CFD3DDataset(Dataset):
         data_directory_U2 = self.data_directory + "extract_cubes_U2_reduced/"
 
         # read cubes data from directories
-        cubes_U0_dict = self._load_3D_cubes(data_directory_U0)
-        cubes_U1_dict = self._load_3D_cubes(data_directory_U1)
-        cubes_U2_dict = self._load_3D_cubes(data_directory_U2)
+        cubes_U0_dict = self.__load_3D_cubes(data_directory_U0)
+        cubes_U1_dict = self.__load_3D_cubes(data_directory_U1)
+        cubes_U2_dict = self.__load_3D_cubes(data_directory_U2)
 
         # compare all folders have same simulation parameters
-        if self._compare_U_sim_keys(cubes_U0_dict, cubes_U1_dict) and \
-           self._compare_U_sim_keys(cubes_U0_dict, cubes_U2_dict) and \
-           self._compare_U_sim_keys(cubes_U1_dict, cubes_U2_dict):
+        if self.__compare_U_sim_keys(cubes_U0_dict, cubes_U1_dict) and \
+           self.__compare_U_sim_keys(cubes_U0_dict, cubes_U2_dict) and \
+           self.__compare_U_sim_keys(cubes_U1_dict, cubes_U2_dict):
             print("[INFO] all folders have same keys (simulations)")
         else:
             print("[INFO] the folders don't have the same keys (simulations)")
             quit()
 
         # concatenate all velocity components into one dictionary data structure
-        cubes_U_all_dict = self._merge_velocity_components_into_dict(cubes_U0_dict, cubes_U1_dict, cubes_U2_dict)
+        cubes_U_all_dict = self.__merge_velocity_components_into_dict(cubes_U0_dict, cubes_U1_dict, cubes_U2_dict)
 
         # creates a list of length timesteps x simulations, each element is a numpy array with cubes size (21,21,21,3)
         # cubes_U_all_channels: 9600 with shape (21,21,21,3)
-        self.cubes_U_all_channels = self._concatenate_3_velocity_components(cubes_U_all_dict)
+        self.cubes_U_all_channels = self.__concatenate_3_velocity_components(cubes_U_all_dict)
         print("[INFO] cubes dataset length:", len(self.cubes_U_all_channels))
         print("[INFO] single cube shape:", self.cubes_U_all_channels[0].shape)
         self.data_len = len(self.cubes_U_all_channels)
 
         # stack all cubes in a final numpy array numpy (9600, 21, 21, 21, 3)
-        self.stacked_cubes = np.stack(self.cubes_U_all_channels, 0)
+        self.stacked_cubes = torch.stack(self.cubes_U_all_channels, 0)
 
         print()
         print("[INFO] mean and std of the cubes dataset along 3 channels")
         # note: not using mean and std separately, just calling them in standardize function (below)
         # note: only standardize data to mean 0 and std 1
-        self.mean, self.std = self._compute_mean_std_dataset(self.stacked_cubes)
+        self.mean, self.std = self.__compute_mean_std_dataset(self.stacked_cubes)
         print("mean:", self.mean)
         print("std:", self.std)
 
         # standardize data from here
         print()
         print("[INFO] standardize data to mean 0 and std 1")
-        self.standardized_cubes = self._standardize_cubes(self.stacked_cubes)
+        self.standardized_cubes = self.__standardize_cubes(self.stacked_cubes)
         print("mean after standardization:", self.standardized_cubes.mean(axis=(0,1,2,3)))
         print("std after standardization:", self.standardized_cubes.std(axis=(0,1,2,3)))
 
         print()
         print("[INFO] finished instantiating 3D CFD pytorch dataset")
 
-    def _load_3D_cubes(self, data_directory):
+    def __load_3D_cubes(self, data_directory):
+        
         """
-        Saves 3D CFD data in a dictionary.
-        Keys correspond to .npy file name
-        Values correspond to arrays of size (21, 21, 21, 100)
+        Loads 3D CFD data from .npy files in the specified directory and stores them in a dictionary.
+        Args:
+            data_directory (str): The directory containing the .npy files.
+        Returns:
+            dict: A dictionary where keys are the .npy file names (excluding the first two characters) 
+                  and values are the loaded numpy arrays of size (21, 21, 21, 100).
         """
 
         cubes = {}
@@ -93,10 +131,17 @@ class CFD3DDataset(Dataset):
 
         return cubes
 
-    def _compare_U_sim_keys(self, cube1, cube2):
+    def __compare_U_sim_keys(self, cube1, cube2):
+
         """
-        Asserts that two folders with two different velocity componentes
-        have same simulation parameters (based on npy file name)
+        Compares the keys of two dictionaries representing velocity components
+        to ensure they have the same simulation parameters based on the .npy file names.
+        Args:
+            cube1 (dict): The first dictionary containing velocity component data.
+            cube2 (dict): The second dictionary containing velocity component data.
+        Returns:
+            bool: True if both dictionaries have the same number of matched keys as the 
+                  expected number of simulations (`self.no_simulations`), False otherwise.
         """
         matched_keys = 0
         for key in cube1:
@@ -108,10 +153,16 @@ class CFD3DDataset(Dataset):
         else:
             return False
 
-    def _merge_velocity_components_into_dict(self, cubes_U0, cubes_U1, cubes_U2):
+    def __merge_velocity_components_into_dict(self, cubes_U0, cubes_U1, cubes_U2):
         """
-        Concatenates all velocity components U0, U1, U2  based on
-        key (simulation name) into a dictionary data structure.
+        Concatenates all velocity components U0, U1, U2 based on
+        Args:
+            cubes_U0 (dict): Dictionary containing the first velocity component.
+            cubes_U1 (dict): Dictionary containing the second velocity component.
+            cubes_U2 (dict): Dictionary containing the third velocity component.
+        Returns:
+            defaultdict: A dictionary where each key corresponds to a simulation name
+                         and the value is a list containing the three velocity components.
         """
         cubes_U = defaultdict(list)
 
@@ -123,8 +174,18 @@ class CFD3DDataset(Dataset):
         print("[INFO] velocity components concatenated into list")
         return cubes_U
 
-    def _concatenate_3_velocity_components(self, cubes_dict):
+    def __concatenate_3_velocity_components(self, cubes_dict):
+
         """
+        Concatenates the three velocity components (U0, U1, U2) from the input dictionary of cubes
+        into a single array with three channels for each timestep.
+        Args:
+            cubes_dict (dict): A dictionary where keys are identifiers and values are 4D numpy arrays
+                               representing velocity components. Each array has the shape 
+                               (x_dim, y_dim, z_dim, timesteps).
+        Returns:
+            list: A list of 4D numpy arrays, each with shape (x_dim, y_dim, z_dim, 3), where the last 
+                  dimension represents the concatenated velocity components for each timestep.
         """
         cubes_3_channels = []
 
@@ -146,52 +207,65 @@ class CFD3DDataset(Dataset):
 
         return cubes_3_channels
 
-    def _compute_mean_std_dataset(self, data):
+    def __compute_mean_std_dataset(self, data):
+        
+
         """
-        Gets mean and standard deviation values for 3 channels of 3D cube data set.
-        It computes mean and standard deviation of full dataset (not on batches)
-
-        Based on: https://stackoverflow.com/questions/47124143/mean-value-of-each-channel-of-several-images
-        Based on: https://discuss.pytorch.org/t/about-normalization-using-pre-trained-vgg16-networks/23560/6
-
-        Returns 1D arrays for mean and std for corresponding channels.
+        Computes the mean and standard deviation for each channel of a 3D cube dataset.
+        This method calculates the mean and standard deviation across the entire dataset,
+        rather than on individual batches, for each of the three channels in the 3D data.
+        References:
+        - https://stackoverflow.com/questions/47124143/mean-value-of-each-channel-of-several-images
+        - https://discuss.pytorch.org/t/about-normalization-using-pre-trained-vgg16-networks/23560/6
+        Args:
+            data (numpy.ndarray): The 3D cube dataset with shape (N, D, H, W, C), where
+                                  N is the number of samples, D is the depth, H is the height,
+                                  W is the width, and C is the number of channels.
+        Returns:
+            tuple: A tuple containing two 1D torch tensors:
+                   - mean (torch.Tensor): The mean values for each channel.
+                   - std (torch.Tensor): The standard deviation values for each channel.
         """
 
         mean = 0.
         std = 0.
 
-        mean = np.mean(data, axis=(0,1,2,3), dtype=np.float64) # axis=(0,1,2,3)
-        std = np.std(data, axis=(0,1,2,3), dtype=np.float64)
+        mean = torch.mean(data, dim=(0,1,2,3), dtype=torch.float64) 
+        std = torch.std(data, dim=(0,1,2,3), dtype=torch.float64)
 
-        return torch.from_numpy(mean), torch.from_numpy(std)
+        return mean, std
 
-    def _standardize_cubes(self, data):
+    def __standardize_cubes(self, data):
+        
         """
-        Performs standard normalization on given array.
+        Standardizes the input data cubes by subtracting the mean and dividing by the standard deviation 
+        along the specified axes.
+        Parameters:
+        data (numpy.ndarray): The input data array with shape (9600, 21, 21, 21, 3).
+        Returns:
+        numpy.ndarray: The standardized data array with the same shape as the input.
         """
+
         # (9600, 21, 21, 21, 3)
         # means = [7.5, 6.3, 1.2]
-        return (data - data.mean(axis=(0,1,2,3), keepdims=True)) / data.std(axis=(0,1,2,3), keepdims=True)
+        return (data - data.mean(dim=(0,1,2,3), keepdim=True)) / data.std(dim=(0,1,2,3), keepdim=True)
 
-    def __getitem__(self, index):
+    def ___getitem__(self, index):
+
         """
         Returns a tensor cube of shape (3,21,21,21) normalized by
         substracting mean and dividing std of dataset computed beforehand.
         """
 
-        single_cube_numpy = self.standardized_cubes[index] # (21, 21, 21, 3)
+        single_cube_tensor = self.standardized_cubes[index] # (21, 21, 21, 3)
 
         # min-max normalization, clipping and resizing
-        single_cube_minmax = self._minmax_normalization(single_cube_numpy) # (custom function)
-        single_cube_transformed = np.clip(self._scale_by(np.clip(single_cube_minmax-0.1, 0, 1)**0.4, 2)-0.1, 0, 1) # (from tutorial)
-        single_cube_resized = resize(single_cube_transformed, (21, 21, 21), mode='constant') # (21,21,21)
+        single_cube_minmax = self.__minmax_normalization(single_cube_tensor) # (custom function)
+        single_cube_transformed = torch.clamp(self.__scale_by(torch.clamp(single_cube_minmax-0.1, 0, 1)**0.4, 2)-0.1, 0, 1) # (from tutorial)
+        single_cube_resized = torch.from_numpy(resize(single_cube_transformed.numpy(), (21, 21, 21), mode='constant')) # (21,21,21)
 
-        # swap axes from numpy shape (21, 21, 21, 3) to torch shape (3, 21, 21, 21) this is for input to Conv3D
-        # single_cube_reshaped = np.transpose(single_cube_minmax, (3, 1, 2, 0))
-        single_cube_reshaped = np.transpose(single_cube_resized, (3, 1, 2, 0))
-
-        # convert cube to torch tensor
-        single_cube_tensor = torch.from_numpy(single_cube_reshaped)
+        # swap axes from torch shape (21, 21, 21, 3) to torch shape (3, 21, 21, 21) this is for input to Conv3D
+        single_cube_reshaped = single_cube_resized.permute(3, 0, 1, 2)
 
         # NOTE: not applying ToTensor() because it only works with 2D images
         # if self.transforms is not None:
@@ -200,7 +274,8 @@ class CFD3DDataset(Dataset):
 
         return single_cube_tensor
 
-    def _minmax_normalization(self, data):
+    def __minmax_normalization(self, data):
+       
        """
        Performs MinMax normalization on given array. Range [0, 1]
        """
@@ -210,10 +285,10 @@ class CFD3DDataset(Dataset):
        data_max = np.max(data, axis=(0,1,2))
 
        return (data-data_min)/(data_max - data_min)
+       data_min = torch.min(data, dim=(0,1,2)).values
+       data_max = torch.max(data, dim=(0,1,2)).values
 
-    def _scale_by(self, arr, fac):
-        mean = np.mean(arr)
-        return (arr-mean)*fac + mean
+       return (data - data_min) / (data_max - data_min)
 
-    def __len__(self):
+    def ___len__(self):
         return self.data_len

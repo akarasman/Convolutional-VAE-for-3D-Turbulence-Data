@@ -13,7 +13,6 @@ from torchvision import transforms
 from typing import Callable, List, Optional, Tuple
 
 class Field3DDataset(Dataset):
-    
     """
     Field3DDataset is a custom PyTorch Dataset class for handling 3D CFD (Computational Fluid Dynamics) data.
     Attributes:
@@ -21,10 +20,8 @@ class Field3DDataset(Dataset):
         n_voxels (int): Number of voxels for resizing the cubes.
         transforms (callable, optional): Optional transform to be applied on a sample.
         data_len (int): Length of the dataset.
-        stacked_cubes (torch.Tensor): Tensor of stacked cubes with shape (N, n_voxels, n_voxels, n_voxels, n_voxels).
         mean (torch.Tensor): Mean of the dataset along the C channels.
         std (torch.Tensor): Standard deviation of the dataset along the C channels.
-        standardized_cubes (torch.Tensor): Standardized cubes with mean 0 and std 1.
     Methods:
         __compute_mean_std_dataset(data):
             Computes the mean and standard deviation of the dataset along the C channels.
@@ -40,7 +37,7 @@ class Field3DDataset(Dataset):
             Returns the length of the dataset.
     """
 
-    def __init__(self, data_directory: str, n_voxels=21, transforms: Optional[Callable] = None) -> None:
+    def __init__(self, data_directory: str, n_voxels: int = 21, channels: int = 3, transforms: Optional[Callable] = None) -> None:
         """
         data_directory: path to directory that contains subfolders with the npy files
         Subfolders are folders containing each component of velocity: extract_cubes_U0_reduced
@@ -50,78 +47,63 @@ class Field3DDataset(Dataset):
 
         self.data_directory = data_directory
         self.n_voxels = n_voxels
+        self.channels = channels
         self.transforms = transforms
 
-        # load 3D CFD data from .npy files in the specified directory
-        data_cubes: List[torch.Tensor] = []
-        print(data_directory)
-        for i, folder in enumerate(os.listdir(data_directory)):
-            data_file = os.path.join(data_directory, f'sample_{i}.pt')
+        # List all data files
+        self.data_files = [os.path.join(data_directory, f) for f in os.listdir(data_directory) if f.endswith('.pt')]
+        self.data_len = len(self.data_files)
+
+        # Compute mean and std on-the-fly if needed
+        self.mean, self.std = self.__compute_mean_std_dataset()
+
+    def __compute_mean_std_dataset(self):
+        """
+        Computes the mean and standard deviation for each channel of the dataset.
+        This method calculates the mean and standard deviation across the entire dataset.
+        """
+        mean = torch.zeros(self.n_voxels, self.n_voxels, self.n_voxels, self.channels)
+        std = torch.zeros(self.n_voxels, self.n_voxels, self.n_voxels, self.channels)
+
+        for data_file in self.data_files:
             data_cube = torch.load(data_file)
-            data_cube.unsqueeze(0)
-            data_cubes.append(data_cube)
+            mean += data_cube
+        for data_file in self.data_files:
+            data_cube = torch.load(data_file)
+            std += (data_cube - mean) ** 2
 
-        self.data_len = len(data_cubes)
-
-        # stack all cubes in a final numpy array numpy (9600, 21, 21, 21, 3)
-        self.stacked_cubes = torch.stack(data_cubes, 0)
-
-        # note: not using mean and std separately, just calling them in standardize function (below)
-        # note: only standardize data to mean 0 and std 1
-        self.mean, self.std = self.__compute_mean_std_dataset(self.stacked_cubes)
-
-        # standardize data from here
-        self.standardized_cubes = self.__standardize_cubes(self.stacked_cubes)
-
-    @staticmethod
-    def __compute_mean_std_dataset(data: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        mean /= self.data_len
+        std /= self.data_len
         
-        """
-        Computes the mean and standard deviation for each channel of a 3D cube dataset.
-        This method calculates the mean and standard deviation across the entire dataset,
-        rather than on individual batches, for each of the three channels in the 3D data.
-        References:
-        - https://stackoverflow.com/questions/47124143/mean-value-of-each-channel-of-several-images
-        - https://discuss.pytorch.org/t/about-normalization-using-pre-trained-vgg16-networks/23560/6
-        Args:
-            data (numpy.ndarray): The 3D cube dataset with shape (N, D, H, W, C), where
-                                  N is the number of samples, D is the depth, H is the height,
-                                  W is the width, and C is the number of channels.
-        Returns:
-            tuple: A tuple containing two 1D torch tensors:
-                   - mean (torch.Tensor): The mean values for each channel.
-                   - std (torch.Tensor): The standard deviation values for each channel.
-        """
-
-        mean = torch.mean(data, dim=(0,1,2,3)) 
-        std = torch.std(data, dim=(0,1,2,3))
-
         return mean, std
 
-    @staticmethod
-    def __standardize_cubes(data: torch.Tensor) -> torch.Tensor:
+    def __standardize_cubes(self, data):
         """
-        Standardizes the input data cubes by subtracting the mean and dividing by the standard deviation 
-        along the specified axes.
-        Parameters:
-        data (torch.tensor): The input data tensor with shape (X, Y, Z, C).
-        Returns:
-        torch.tensor: The standardized data tensor with the same shape as the input.
+        Standardizes the input data cubes by subtracting the mean and dividing by the standard deviation.
         """
+        return (data - self.mean) / self.std
 
-
-        return (data - data.mean(dim=(0,1,2,3), keepdim=True)) / data.std(dim=(0,1,2,3), keepdim=True)
-
-    def __getitem__(self, index: int) -> torch.Tensor:
-
+    def __minmax_normalization(self, data):
         """
-        Returns a tensor cube of shape (3,21,21,21) normalized by
-        substracting mean and dividing std of dataset computed beforehand.
+        Performs MinMax normalization on given array. Range [0, 1]
         """
+        data_min = torch.min(data)
+        data_max = torch.max(data)
+        return (data - data_min) / (data_max - data_min)
 
-        cube_tensor = self.standardized_cubes[index]
+    def __scale_by(self, cube, factor):
+        mean = torch.mean(cube)
+        return (cube - mean) * factor + mean
 
-        # min-max normalization, clipping and resizing
+    def __getitem__(self, index):
+        """
+        Returns a tensor cube of shape (C, n_voxels, n_voxels, n_voxels) normalized by subtracting mean and dividing std of dataset computed beforehand.
+        """
+        data_file = self.data_files[index]
+        data_cube = torch.load(data_file)
+
+        # Standardize the data
+        cube_tensor = self.__standardize_cubes(data_cube)
         cube_minmax = self.__minmax_normalization(cube_tensor)
 
         # Very strange transformation, not sure what it does
@@ -132,28 +114,10 @@ class Field3DDataset(Dataset):
         # swap axes from torch shape (21, 21, 21, 3) to torch shape (3, 21, 21, 21) this is for input to Conv3D
         cube_reshaped = cube_resized.permute(3, 0, 1, 2)
 
-        # NOTE: not applying ToTensor() because it only works with 2D images
-        # if self.transforms is not None:
-        #     cube_tensor = self.transforms(single_cube_normalized)
-        #     cube_tensor = self.transforms(single_cube_PIL)
+        if self.transforms:
+            cube_reshaped = self.transforms(cube_reshaped)
 
         return cube_reshaped
 
-    @staticmethod
-    def __scale_by(cube: torch.Tensor, factor: float) -> torch.Tensor:
-        mean = cube.mean()
-        return (cube-mean)*factor + mean
-
-    @staticmethod
-    def __minmax_normalization(data: torch.Tensor) -> torch.Tensor:
-        """
-        Performs MinMax normalization on given array. Range [0, 1]
-        """
-
-        data_min, _ = torch.min(data, dim=0)
-        data_max, _ = torch.max(data, dim=0)
-
-        return (data-data_min) / (data_max - data_min)
-
-    def __len__(self) -> int:
+    def __len__(self):
         return self.data_len

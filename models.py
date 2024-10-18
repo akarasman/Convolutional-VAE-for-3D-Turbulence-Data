@@ -6,21 +6,20 @@ from torch.autograd import Variable
 
 class Flatten(nn.Module):
     def forward(self, input):
+        print(input.shape)
         return input.view(input.size(0), -1)
 
 
 class UnFlatten(nn.Module):
     # NOTE: (size, x, x, x) are being computed manually as of now (this is based on output of encoder)
-    def forward(self, input, size=512): # size=128
-        return input.view(input.size(0), size, 3, 3, 3)
+    def forward(self, input, size=128): # size=128
+        return input.view(input.size(0), size, 6, 6, 6)
         # return input.view(input.size(0), size, 6, 6, 6)
 
 
 class CVAE_3D(nn.Module):
     def __init__(self, image_channels=3, h_dim=128, z_dim=32):
         super(CVAE_3D, self).__init__()
-        print()
-        print("[INFO] instantiating pytorch model: 3D CVAE")
 
         self.encoder = nn.Sequential(
             nn.Conv3d(in_channels=image_channels, out_channels=16, kernel_size=4, stride=1, padding=0),
@@ -104,7 +103,8 @@ class CVAE_3D(nn.Module):
         return z
 
     def representation(self, x):
-        return self.bottleneck(self.encoder(x))[0]
+        x_encoded = self.encoder(x)
+        return self.bottleneck(x_encoded)[0]
 
     def forward(self, x):
         # print("[INFO] Input data shape:", x.size())
@@ -127,8 +127,6 @@ class CVAE_3D(nn.Module):
 class CVAE_3D_II(nn.Module):
     def __init__(self, image_channels=3, h_dim=128, z_dim=32):
         super(CVAE_3D_II, self).__init__()
-        print()
-        print("[INFO] instantiating pytorch model: 3D CVAE")
 
         self.encoder = nn.Sequential(
             nn.Conv3d(in_channels=image_channels, out_channels=32, kernel_size=4, stride=1, padding=0),

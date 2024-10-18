@@ -12,41 +12,35 @@ from torch.utils.data.dataset import Dataset
 from torchvision import transforms
 from typing import Callable, List, Optional, Tuple
 
-class CFD3DDataset(Dataset):
+class Field3DDataset(Dataset):
     
     """
-    CFD3DDataset is a custom PyTorch Dataset class for handling 3D CFD (Computational Fluid Dynamics) data.
+    Field3DDataset is a custom PyTorch Dataset class for handling 3D CFD (Computational Fluid Dynamics) data.
     Attributes:
         data_directory (str): Path to the directory containing subfolders with the npy files.
-        no_simulations (int): Number of simulations.
-        simulation_timesteps (int): Number of timesteps per simulation.
+        n_voxels (int): Number of voxels for resizing the cubes.
         transforms (callable, optional): Optional transform to be applied on a sample.
-        cubes_U_all_channels (list): List of numpy arrays, each representing a cube with shape (21, 21, 21, 3).
         data_len (int): Length of the dataset.
-        stacked_cubes (numpy.ndarray): Numpy array of stacked cubes with shape (9600, 21, 21, 21, 3).
-        mean (torch.Tensor): Mean of the dataset along the 3 channels.
-        std (torch.Tensor): Standard deviation of the dataset along the 3 channels.
-        standardized_cubes (numpy.ndarray): Standardized cubes with mean 0 and std 1.
+        stacked_cubes (torch.Tensor): Tensor of stacked cubes with shape (N, n_voxels, n_voxels, n_voxels, n_voxels).
+        mean (torch.Tensor): Mean of the dataset along the C channels.
+        std (torch.Tensor): Standard deviation of the dataset along the C channels.
+        standardized_cubes (torch.Tensor): Standardized cubes with mean 0 and std 1.
     Methods:
-        __load_3D_cubes(self, data_directory):
-            Loads 3D CFD data from the specified directory into a dictionary.
-        __compare_U_sim_keys(self, cube1, cube2):
-            Compares keys of two dictionaries to ensure they have the same simulation parameters.
-        __merge_velocity_components_into_dict(self, cubes_U0, cubes_U1, cubes_U2):
-            Merges velocity components U0, U1, U2 into a single dictionary based on simulation keys.
-        __concatenate_3_velocity_components(self, cubes_dict):
-            Concatenates the 3 velocity components into a list of numpy arrays.
-        __compute_mean_std_dataset(self, data):
-            Computes the mean and standard deviation of the dataset along the 3 channels.
-        __standardize_cubes(self, data):
+        __compute_mean_std_dataset(data):
+            Computes the mean and standard deviation of the dataset along the C channels.
+        __standardize_cubes(data):
             Standardizes the data to have mean 0 and std 1.
-        __minmax_normalization(self, data):
+        __minmax_normalization(data):
             Performs MinMax normalization on the given array.
-        __scale_by(self, arr, fac):
+        __scale_by(cube, factor):
             Scales the array by a given factor.
+        __getitem__(index):
+            Returns a tensor cube of shape (C, n_voxels, n_voxels, n_voxels) normalized by subtracting mean and dividing std of dataset computed beforehand.
+        __len__():
+            Returns the length of the dataset.
     """
 
-    def __init__(self, data_directory: str, no_simulations: int, simulation_timesteps: int, transforms: Optional[Callable] = None) -> None:
+    def __init__(self, data_directory: str, n_voxels=21, transforms: Optional[Callable] = None) -> None:
         """
         data_directory: path to directory that contains subfolders with the npy files
         Subfolders are folders containing each component of velocity: extract_cubes_U0_reduced
@@ -55,8 +49,7 @@ class CFD3DDataset(Dataset):
         print("[INFO] started instantiating 3D CFD pytorch dataset")
 
         self.data_directory = data_directory
-        self.no_simulations = no_simulations # 96
-        self.simulation_timesteps = simulation_timesteps # 100
+        self.n_voxels = n_voxels
         self.transforms = transforms
 
         # load 3D CFD data from .npy files in the specified directory
@@ -82,6 +75,7 @@ class CFD3DDataset(Dataset):
 
     @staticmethod
     def __compute_mean_std_dataset(data: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        
         """
         Computes the mean and standard deviation for each channel of a 3D cube dataset.
         This method calculates the mean and standard deviation across the entire dataset,
@@ -133,7 +127,7 @@ class CFD3DDataset(Dataset):
         # Very strange transformation, not sure what it does
         cube_clamped = torch.clamp(cube_minmax - 0.1, 0, 1)
         cube_transformed = torch.clamp(self.__scale_by(cube_clamped**0.4, 2)-0.1, 0, 1)
-        cube_resized = torch.tensor(resize(cube_transformed.numpy(), (21, 21, 21), mode='constant'))
+        cube_resized = torch.tensor(resize(cube_transformed.numpy(), [ self.n_voxels ] * 3, mode='constant'))
 
         # swap axes from torch shape (21, 21, 21, 3) to torch shape (3, 21, 21, 21) this is for input to Conv3D
         cube_reshaped = cube_resized.permute(3, 0, 1, 2)

@@ -36,6 +36,7 @@ device = torch.device("cuda" if cuda else "cpu")
 print("[INFO] device used:", device)
 
 def main():
+    
     """
     Run script: python main.py --test_every_epochs 3 --batch_size 32 --epochs 5 --h_dim 128 --z_dim 64
     """

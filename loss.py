@@ -25,6 +25,7 @@ def schedule_KL_annealing(start, stop, n_epochs, n_cycle=4, ratio=0.5):
     return weights
 
 def loss_function(recon_x, x, mu, logvar, kl_weight):
+    
     """
     Computes binary cross entropy and analytical expression of KL divergence used to train Variational Autoencoders
 

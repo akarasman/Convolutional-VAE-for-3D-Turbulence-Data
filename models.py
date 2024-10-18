@@ -3,19 +3,15 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
 
-
 class Flatten(nn.Module):
     def forward(self, input):
-        print(input.shape)
         return input.view(input.size(0), -1)
-
 
 class UnFlatten(nn.Module):
     # NOTE: (size, x, x, x) are being computed manually as of now (this is based on output of encoder)
     def forward(self, input, size=128): # size=128
         return input.view(input.size(0), size, 6, 6, 6)
         # return input.view(input.size(0), size, 6, 6, 6)
-
 
 class CVAE_3D(nn.Module):
     def __init__(self, image_channels=3, h_dim=128, z_dim=32):
